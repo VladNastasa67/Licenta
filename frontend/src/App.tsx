@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
+import ChatWidget from "./components/ChatWidget.tsx";
 
 type MovieRec = {
   movieId: number;
@@ -46,9 +47,13 @@ export default function App() {
   const API_BASE = "http://127.0.0.1:8000";
 
   const [k, setK] = useState("10");
-  const [sortBy, setSortBy] = useState<"default" | "title" | "rating" | "year">("default");
+  const [sortBy, setSortBy] = useState< | "default" | "title_asc" | "title_desc" | "rating_asc" | "rating_desc" | "year_asc" | "year_desc" >("default");
+  const [ratingMin, setRatingMin] = useState("");
+  const [ratingMax, setRatingMax] = useState("");
+  const [yearStart, setYearStart] = useState("");
+  const [yearEnd, setYearEnd] = useState("");
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
-  const [algorithm, setAlgorithm] = useState<"popularity" | "user-knn" | "genre-popularity">("popularity");
+  const [algorithm, setAlgorithm] = useState<"popularity" | "filter-only" | "user-knn" | "genre-popularity" | "chat-ai">("popularity");
   const [users, setUsers] = useState<number[]>([]);
   const [userId, setUserId] = useState<number | null>(null);
 
@@ -111,15 +116,27 @@ export default function App() {
 
     const recs = [...data.recommendations];
 
-    if (sortBy === "title") {
+    if (sortBy === "title_asc") {
       return recs.sort((a, b) => a.title.localeCompare(b.title));
     }
 
-    if (sortBy === "rating") {
+    if (sortBy === "title_desc") {
+      return recs.sort((a, b) => b.title.localeCompare(a.title));
+    }
+
+    if (sortBy === "rating_asc") {
+      return recs.sort((a, b) => (a.mean_rating ?? 0) - (b.mean_rating ?? 0));
+    }
+
+    if (sortBy === "rating_desc") {
       return recs.sort((a, b) => (b.mean_rating ?? 0) - (a.mean_rating ?? 0));
     }
 
-    if (sortBy === "year") {
+    if (sortBy === "year_asc") {
+      return recs.sort((a, b) => getYear(a.title) - getYear(b.title));
+    }
+
+    if (sortBy === "year_desc") {
       return recs.sort((a, b) => getYear(b.title) - getYear(a.title));
     }
 
@@ -127,31 +144,83 @@ export default function App() {
   }
 
   async function loadRecommendations() {
+
+    if (algorithm === "chat-ai") {
+      return;
+    }
     setLoading(true);
     setError(null);
 
     try {
       const kValue = Number(k);
+      const params = new URLSearchParams();
+
+      params.set("k", String(kValue));
+      params.set("sort_by", sortBy);
+
+      if (ratingMin !== "") {
+        params.set("rating_min", ratingMin);
+      }
+
+      if (ratingMax !== "") {
+        params.set("rating_max", ratingMax);
+      }
+
+      if (yearStart !== "") {
+        params.set("year_start", yearStart);
+      }
+
+      if (yearEnd !== "") {
+        params.set("year_end", yearEnd);
+      }
 
       if (!kValue || kValue < 1) {
         throw new Error("Top K trebuie să fie cel puțin 1");
       }
 
-      let url = `${API_BASE}/recommend/popularity?k=${kValue}`;
+      let url = `${API_BASE}/recommend/popularity?${params.toString()}`;
 
       if (algorithm === "user-knn") {
         if (!userId) throw new Error("Selectează un user");
-        url = `${API_BASE}/recommend/user-knn?userId=${userId}&k=${kValue}`;
+
+        params.set("userId", String(userId));
+        url = `${API_BASE}/recommend/user-knn?${params.toString()}`;
+      }
+
+      if (algorithm === "genre-popularity") {
+        if (selectedGenres.length === 0) {
+          throw new Error("Selectează cel puțin un gen");
+        }
+
+        selectedGenres.forEach((g) => {
+          params.append("genres", g);
+        });
+
+        url = `${API_BASE}/recommend/popularity-by-genres?${params.toString()}`;
+      }
+
+      if (algorithm === "filter-only") {
+        selectedGenres.forEach((g) => {
+          params.append("genres", g);
+        });
+
+        url = `${API_BASE}/recommend/filter-only?${params.toString()}`;
+      }
+
+      if (algorithm === "user-knn") {
+        if (!userId) throw new Error("Selectează un user");
+        params.set("userId", String(userId));
+        url = `${API_BASE}/recommend/user-knn?${params.toString()}`;
       }
 
       if (algorithm === "genre-popularity") {
         if (selectedGenres.length === 0) throw new Error("Selectează cel puțin un gen");
 
-        const genreParams = selectedGenres
-          .map((g) => `genres=${encodeURIComponent(g)}`)
-          .join("&");
+        selectedGenres.forEach((g) => {
+          params.append("genres", g);
+        });
 
-        url = `${API_BASE}/recommend/popularity-by-genres?${genreParams}&k=${kValue}`;
+        url = `${API_BASE}/recommend/popularity-by-genres?${params.toString()}`;
       }
 
       const res = await fetch(url);
@@ -194,8 +263,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadRecommendations();
-  }, [k, algorithm, userId, selectedGenres]);
+  loadRecommendations();
+  }, [
+    k,
+    algorithm,
+    userId,
+    selectedGenres,
+    sortBy,
+    ratingMin,
+    ratingMax,
+    yearStart,
+    yearEnd,
+  ]);
 
   useEffect(() => {
     if (showSeen && algorithm === "user-knn" && userId) {
@@ -206,6 +285,27 @@ export default function App() {
     }
   }, [showSeen, userId, seenLimit, seenMinRating, algorithm]);
 
+  function handleAiRecommendations(aiData: {
+    reply: string;
+    genres?: string[];
+    year_start?: number;
+    year_end?: number;
+    recommendations: MovieRec[];
+  }) {
+    if (!aiData.recommendations || aiData.recommendations.length === 0) {
+      return;
+    }
+    setAlgorithm("chat-ai");
+    setSelectedGenres(aiData.genres || []);
+
+    setData({
+      algorithm: "chat-ai",
+      k: aiData.recommendations.length,
+      genres: aiData.genres || [],
+      recommendations: aiData.recommendations,
+    });
+  }
+  
   return (
     <main className="app">
       <div className="container">
@@ -246,6 +346,7 @@ export default function App() {
                 <option value="popularity">Popularity</option>
                 <option value="user-knn">User-KNN personalizat</option>
                 <option value="genre-popularity">Top filme după genuri</option>
+                <option value="filter-only">Filtrare simpla</option>
               </select>
             </div>
 
@@ -283,11 +384,77 @@ export default function App() {
               <label>Sortare</label>
               <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)}>
                 <option value="default">Implicit</option>
-                <option value="title">Alfabetic</option>
-                <option value="rating">După rating</option>
-                <option value="year">După anul apariției</option>
+                <option value="title_asc">Titlu A-Z</option>
+                <option value="title_desc">Titlu Z-A</option>
+                <option value="rating_desc">Rating descrescător</option>
+                <option value="rating_asc">Rating crescător</option>
+                <option value="year_desc">An descrescător</option>
+                <option value="year_asc">An crescător</option>
               </select>
             </div>
+
+            <div className="field small">
+              <label>Rating minim</label>
+              <input
+                type="number"
+                min="0"
+                max="5"
+                step="0.1"
+                value={ratingMin}
+                onChange={(e) => setRatingMin(e.target.value)}
+                placeholder="ex: 3.5"
+              />
+            </div>
+
+            <div className="field small">
+              <label>Rating maxim</label>
+              <input
+                type="number"
+                min="0"
+                max="5"
+                step="0.1"
+                value={ratingMax}
+                onChange={(e) => setRatingMax(e.target.value)}
+                placeholder="ex: 5"
+              />
+            </div>
+
+            <div className="field small">
+              <label>Apărut după</label>
+              <input
+                type="number"
+                min="1900"
+                max="2100"
+                value={yearStart}
+                onChange={(e) => setYearStart(e.target.value)}
+                placeholder="ex: 2000"
+              />
+            </div>
+
+            <div className="field small">
+              <label>Apărut înainte de</label>
+              <input
+                type="number"
+                min="1900"
+                max="2100"
+                value={yearEnd}
+                onChange={(e) => setYearEnd(e.target.value)}
+                placeholder="ex: 2020"
+              />
+            </div>
+
+            <button
+              className="secondary-btn"
+              type="button"
+              onClick={() => {
+                setRatingMin("");
+                setRatingMax("");
+                setYearStart("");
+                setYearEnd("");
+              }}
+            >
+              Resetează filtre
+            </button>
 
             <div className="field">
               <label>Afișare</label>
@@ -341,7 +508,7 @@ export default function App() {
                   type="checkbox"
                   checked={selectedGenres.includes(g)}
                   onChange={() => toggleGenre(g)}
-                  disabled={algorithm !== "genre-popularity"}
+                  disabled={algorithm !== "genre-popularity" && algorithm !== "filter-only"}
                 />
                 {g}
               </label>
@@ -455,6 +622,10 @@ export default function App() {
           </section>
         )}
       </div>
+      <ChatWidget
+        currentRecommendations={getSortedRecommendations()}
+        onRecommendations={handleAiRecommendations}
+      />
     </main>
   );
 }
