@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import "./App.css";
 
 type MovieRec = {
   movieId: number;
   title: string;
   genres: string;
+  mean_rating?: number;
 };
 
 type RecoResponse = {
@@ -43,7 +45,9 @@ type SeenResponse = {
 export default function App() {
   const API_BASE = "http://127.0.0.1:8000";
 
-  const [k, setK] = useState(10);
+  const [k, setK] = useState("10");
+  const [sortBy, setSortBy] = useState<"default" | "title" | "rating" | "year">("default");
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [algorithm, setAlgorithm] = useState<"popularity" | "user-knn" | "genre-popularity">("popularity");
   const [users, setUsers] = useState<number[]>([]);
   const [userId, setUserId] = useState<number | null>(null);
@@ -89,10 +93,37 @@ export default function App() {
 
   function toggleGenre(genre: string) {
     setSelectedGenres((prev) =>
-      prev.includes(genre)
-        ? prev.filter((g) => g !== genre)
-        : [...prev, genre]
+      prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre]
     );
+  }
+
+  function splitGenres(value: string) {
+    return value.split("|").filter(Boolean);
+  }
+
+  function getYear(title: string) {
+    const match = title.match(/\((\d{4})\)/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function getSortedRecommendations() {
+    if (!data) return [];
+
+    const recs = [...data.recommendations];
+
+    if (sortBy === "title") {
+      return recs.sort((a, b) => a.title.localeCompare(b.title));
+    }
+
+    if (sortBy === "rating") {
+      return recs.sort((a, b) => (b.mean_rating ?? 0) - (a.mean_rating ?? 0));
+    }
+
+    if (sortBy === "year") {
+      return recs.sort((a, b) => getYear(b.title) - getYear(a.title));
+    }
+
+    return recs;
   }
 
   async function loadRecommendations() {
@@ -100,23 +131,27 @@ export default function App() {
     setError(null);
 
     try {
-      let url = `${API_BASE}/recommend/popularity?k=${k}`;
+      const kValue = Number(k);
+
+      if (!kValue || kValue < 1) {
+        throw new Error("Top K trebuie să fie cel puțin 1");
+      }
+
+      let url = `${API_BASE}/recommend/popularity?k=${kValue}`;
 
       if (algorithm === "user-knn") {
         if (!userId) throw new Error("Selectează un user");
-        url = `${API_BASE}/recommend/user-knn?userId=${userId}&k=${k}`;
+        url = `${API_BASE}/recommend/user-knn?userId=${userId}&k=${kValue}`;
       }
 
       if (algorithm === "genre-popularity") {
-        if (selectedGenres.length === 0) {
-          throw new Error("Selectează cel puțin un gen");
-        }
+        if (selectedGenres.length === 0) throw new Error("Selectează cel puțin un gen");
 
         const genreParams = selectedGenres
           .map((g) => `genres=${encodeURIComponent(g)}`)
           .join("&");
 
-        url = `${API_BASE}/recommend/popularity-by-genres?${genreParams}&k=${k}`;
+        url = `${API_BASE}/recommend/popularity-by-genres?${genreParams}&k=${kValue}`;
       }
 
       const res = await fetch(url);
@@ -172,169 +207,254 @@ export default function App() {
   }, [showSeen, userId, seenLimit, seenMinRating, algorithm]);
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24, fontFamily: "Arial" }}>
-      <h1>Movie Recommender</h1>
-
-      <p>
-        Backend: <code>{API_BASE}</code> • Algoritm: <b>{algorithm}</b>
-        {algorithm === "user-knn" && userId ? <> • User: <b>{userId}</b></> : null}
-        {algorithm === "genre-popularity" && selectedGenres.length > 0 ? (
-          <> • Genuri: <b>{selectedGenres.join(", ")}</b></>
-        ) : null}
-      </p>
-
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
-        <label>
-          Algoritm:{" "}
-          <select
-            value={algorithm}
-            onChange={(e) => setAlgorithm(e.target.value as any)}
-            style={{ padding: 6, minWidth: 220 }}
-          >
-            <option value="popularity">Popularity</option>
-            <option value="user-knn">User-KNN (personalizat)</option>
-            <option value="genre-popularity">Top filme după mai multe genuri</option>
-          </select>
-        </label>
-
-        <label>
-          User:{" "}
-          <select
-            value={userId ?? ""}
-            onChange={(e) => setUserId(Number(e.target.value))}
-            style={{ padding: 6, minWidth: 140 }}
-            disabled={algorithm !== "user-knn"}
-          >
-            {users.map((u) => (
-              <option key={u} value={u}>
-                user {u}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Top K:{" "}
-          <input
-            type="number"
-            value={k}
-            onChange={(e) => setK(Number(e.target.value))}
-            style={{ width: 90, padding: 6 }}
-          />
-        </label>
-
-        <button onClick={loadRecommendations} style={{ padding: "8px 12px", cursor: "pointer" }}>
-          {loading ? "Se încarcă..." : "Reîncarcă"}
-        </button>
-
-        <button
-          onClick={async () => {
-            const next = !showSeen;
-            setShowSeen(next);
-            if (next && algorithm === "user-knn" && userId) {
-              await loadSeen();
-            }
-          }}
-          style={{ padding: "8px 12px", cursor: "pointer" }}
-          disabled={algorithm !== "user-knn"}
-          title={algorithm !== "user-knn" ? "Selectează User-KNN ca să vezi istoricul userului" : ""}
-        >
-          {showSeen ? "Ascunde filme văzute" : "Arată filme văzute"}
-        </button>
-      </div>
-
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ marginBottom: 8 }}><b>Genuri:</b></div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-          {genres.map((g) => (
-            <label key={g} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <input
-                type="checkbox"
-                checked={selectedGenres.includes(g)}
-                onChange={() => toggleGenre(g)}
-                disabled={algorithm !== "genre-popularity"}
-              />
-              {g}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {error && (
-        <div style={{ color: "red", marginBottom: 16 }}>
-          Eroare: {error}
-        </div>
-      )}
-
-      {data && (
-        <div>
-          <h2>Recomandări (Top {data.k})</h2>
-          <ol>
-            {data.recommendations.map((m) => (
-              <li key={m.movieId} style={{ marginBottom: 12 }}>
-                <div><b>{m.title}</b></div>
-                <div style={{ color: "#666" }}>{m.genres}</div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-
-      {showSeen && algorithm === "user-knn" && (
-        <div style={{ marginTop: 32 }}>
-          <h2>Filme văzute/evaluate</h2>
-
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-            <label>
-              Limit:{" "}
-              <input
-                type="number"
-                value={seenLimit}
-                onChange={(e) => setSeenLimit(Number(e.target.value))}
-                style={{ width: 90, padding: 6 }}
-              />
-            </label>
-
-            <label>
-              Min rating:{" "}
-              <input
-                type="number"
-                step="0.5"
-                value={seenMinRating}
-                onChange={(e) => setSeenMinRating(Number(e.target.value))}
-                style={{ width: 90, padding: 6 }}
-              />
-            </label>
-
-            <button onClick={loadSeen} style={{ padding: "8px 12px", cursor: "pointer" }}>
-              {seenLoading ? "Se încarcă..." : "Reîncarcă văzute"}
-            </button>
+    <main className="app">
+      <div className="container">
+        <nav className="navbar">
+          <div className="logo">
+            <span className="logo-icon">🎬</span>
+            <span>MovieAI</span>
           </div>
 
-          {seenError && <div style={{ color: "red" }}>Eroare: {seenError}</div>}
+          <div className="nav-links">
+            <a href="#recommendations">Recomandări</a>
+            <a href="#genres">Genuri</a>
+            <a href="#about">Despre</a>
+          </div>
+        </nav>
 
-          {!seenError && !seenData && <div>Nu există date încă.</div>}
+        <header className="header">
+          <span className="eyebrow">MovieLens • Recommender System</span>
+          <h1>Movie Recommender</h1>
+          <p>
+            Recomandări de filme folosind popularitate, User-KNN și filtrare după mai multe genuri.
+          </p>
+        </header>
 
-          {seenData && (
-            <>
-              <p>
-                Total ratinguri user: {seenData.count} • Afișate: {seenData.seen.length}
-              </p>
+        <section className="panel">
+          <div className="info-line">
+            Backend: <code>{API_BASE}</code> • Algoritm: <b>{algorithm}</b>
+            {algorithm === "user-knn" && userId ? <> • User: <b>{userId}</b></> : null}
+            {algorithm === "genre-popularity" && selectedGenres.length > 0 ? (
+              <> • Genuri: <b>{selectedGenres.join(", ")}</b></>
+            ) : null}
+          </div>
 
-              <ol>
-                {seenData.seen.map((m) => (
-                  <li key={m.movieId} style={{ marginBottom: 12 }}>
-                    <div>
-                      <b>{m.title}</b> (rating: {m.rating})
-                    </div>
-                    <div style={{ color: "#666" }}>{m.genres}</div>
-                  </li>
+          <div className="controls">
+            <div className="field">
+              <label>Algoritm</label>
+              <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value as any)}>
+                <option value="popularity">Popularity</option>
+                <option value="user-knn">User-KNN personalizat</option>
+                <option value="genre-popularity">Top filme după genuri</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label>User</label>
+              <select
+                value={userId ?? ""}
+                onChange={(e) => setUserId(Number(e.target.value))}
+                disabled={algorithm !== "user-knn"}
+              >
+                {users.map((u) => (
+                  <option key={u} value={u}>
+                    User {u}
+                  </option>
                 ))}
-              </ol>
-            </>
+              </select>
+            </div>
+
+            <div className="field small">
+              <label>Top K</label>
+              <input
+                type="number"
+                min="1"
+                value={k}
+                onChange={(e) => {
+                  let val = e.target.value;
+                  val = val.replace(/^0+(\d)/, "$1");
+                  if (val.startsWith("-")) return;
+                  setK(val);
+                }}
+              />
+            </div>
+
+            <div className="field">
+              <label>Sortare</label>
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)}>
+                <option value="default">Implicit</option>
+                <option value="title">Alfabetic</option>
+                <option value="rating">După rating</option>
+                <option value="year">După anul apariției</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label>Afișare</label>
+              <div className="view-toggle">
+                <button
+                  type="button"
+                  className={viewMode === "list" ? "view-btn active" : "view-btn"}
+                  onClick={() => setViewMode("list")}
+                >
+                  ☰ Listă
+                </button>
+
+                <button
+                  type="button"
+                  className={viewMode === "grid" ? "view-btn active" : "view-btn"}
+                  onClick={() => setViewMode("grid")}
+                >
+                  ▦ Grid
+                </button>
+              </div>
+            </div>
+
+            <button onClick={loadRecommendations}>
+              {loading ? "Se încarcă..." : "Generează recomandări"}
+            </button>
+
+            <button
+              className="secondary-btn"
+              onClick={async () => {
+                const next = !showSeen;
+                setShowSeen(next);
+                if (next && algorithm === "user-knn" && userId) await loadSeen();
+              }}
+              disabled={algorithm !== "user-knn"}
+            >
+              {showSeen ? "Ascunde filme văzute" : "Arată filme văzute"}
+            </button>
+          </div>
+        </section>
+
+        <section className="panel" id="genres">
+          <h2 className="section-title">Alege genurile preferate</h2>
+          <p className="muted">
+            Funcția este activă când alegi algoritmul „Top filme după genuri”.
+          </p>
+
+          <div className="genres-grid">
+            {genres.map((g) => (
+              <label className="genre-chip" key={g}>
+                <input
+                  type="checkbox"
+                  checked={selectedGenres.includes(g)}
+                  onChange={() => toggleGenre(g)}
+                  disabled={algorithm !== "genre-popularity"}
+                />
+                {g}
+              </label>
+            ))}
+          </div>
+        </section>
+
+        {error && <div className="error">Eroare: {error}</div>}
+
+        <section className="panel" id="recommendations">
+          <h2 className="section-title">Recomandări {data ? `(Top ${data.k})` : ""}</h2>
+
+          {!data && !loading && (
+            <div className="empty">Alege un algoritm și generează recomandări.</div>
           )}
-        </div>
-      )}
-    </div>
+
+          {data && data.recommendations.length === 0 && (
+            <div className="empty">Nu s-au găsit filme pentru criteriile selectate.</div>
+          )}
+
+          {data && data.recommendations.length > 0 && (
+            <div className={viewMode === "grid" ? "movie-grid" : "movie-list"}>
+              {getSortedRecommendations().map((m, index) => (
+                <article className="movie-card" key={m.movieId}>
+                  <div className="movie-rank">#{index + 1}</div>
+
+                  <div>
+                    <div className="movie-title">{m.title}</div>
+
+                    <div className="movie-meta">
+                      ⭐ Rating mediu: {m.mean_rating ? m.mean_rating.toFixed(2) : "N/A"} • An:{" "}
+                      {getYear(m.title) || "N/A"}
+                    </div>
+
+                    <div>
+                      {splitGenres(m.genres).map((g) => (
+                        <span className="badge" key={g}>
+                          {g}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {showSeen && algorithm === "user-knn" && (
+          <section className="panel">
+            <h2 className="section-title">Filme văzute / evaluate</h2>
+
+            <div className="controls compact">
+              <div className="field small">
+                <label>Limit</label>
+                <input
+                  type="number"
+                  value={seenLimit}
+                  onChange={(e) => setSeenLimit(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="field small">
+                <label>Min rating</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={seenMinRating}
+                  onChange={(e) => setSeenMinRating(Number(e.target.value))}
+                />
+              </div>
+
+              <button onClick={loadSeen}>
+                {seenLoading ? "Se încarcă..." : "Reîncarcă văzute"}
+              </button>
+            </div>
+
+            {seenError && <div className="error">Eroare: {seenError}</div>}
+
+            {seenData && (
+              <>
+                <p className="muted">
+                  Total ratinguri user: {seenData.count} • Afișate: {seenData.seen.length}
+                </p>
+
+                <div className="movie-list">
+                  {seenData.seen.map((m) => (
+                    <article className="movie-card" key={m.movieId}>
+                      <div className="rating-pill">{m.rating}</div>
+
+                      <div>
+                        <div className="movie-title">{m.title}</div>
+
+                        <div className="movie-meta">
+                          Rating dat de user: {m.rating} • An: {getYear(m.title) || "N/A"}
+                        </div>
+
+                        <div>
+                          {splitGenres(m.genres).map((g) => (
+                            <span className="badge" key={g}>
+                              {g}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+      </div>
+    </main>
   );
 }

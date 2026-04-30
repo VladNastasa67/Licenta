@@ -58,12 +58,13 @@ def recommend_popularity(k: int = 10):
     rec_ids = pop_model.recommend(k=k)
     recs = movies[movies["movieId"].isin(rec_ids)].copy()
     recs["rank"] = recs["movieId"].apply(lambda x: rec_ids.index(x))
+    recs = recs.merge(pop_model.ranking[["movieId", "mean_rating"]], on="movieId", how="left")
     recs = recs.sort_values("rank")
 
     return {
         "algorithm": "popularity",
         "k": k,
-        "recommendations": recs[["movieId", "title", "genres"]].to_dict(orient="records")
+        "recommendations": recs[["movieId", "title", "genres", "mean_rating"]].to_dict(orient="records")
     }
 
 
@@ -72,28 +73,29 @@ def recommend_popularity_by_genres(genres: list[str] = Query(...), k: int = 10):
     rec_ids = pop_model.recommend_by_genres(movies=movies, genres=genres, k=k)
     recs = movies[movies["movieId"].isin(rec_ids)].copy()
     recs["rank"] = recs["movieId"].apply(lambda x: rec_ids.index(x))
+    recs = recs.merge(pop_model.ranking[["movieId", "mean_rating"]], on="movieId", how="left")
     recs = recs.sort_values("rank")
 
     return {
         "algorithm": "popularity-by-genres",
         "genres": genres,
         "k": k,
-        "recommendations": recs[["movieId", "title", "genres"]].to_dict(orient="records")
+        "recommendations": recs[["movieId", "title", "genres", "mean_rating"]].to_dict(orient="records")
     }
-
 
 @app.get("/recommend/user-knn")
 def recommend_user_knn(userId: int, k: int = 10):
     rec_ids = user_knn_model.recommend(userId, ratings, k=k)
     recs = movies[movies["movieId"].isin(rec_ids)].copy()
     recs["rank"] = recs["movieId"].apply(lambda x: rec_ids.index(x))
+    recs = recs.merge(pop_model.ranking[["movieId", "mean_rating"]], on="movieId", how="left")
     recs = recs.sort_values("rank")
 
     return {
         "algorithm": "user-knn",
         "userId": userId,
         "k": k,
-        "recommendations": recs[["movieId", "title", "genres"]].to_dict(orient="records")
+        "recommendations": recs[["movieId", "title", "genres", "mean_rating"]].to_dict(orient="records")
     }
 
 
