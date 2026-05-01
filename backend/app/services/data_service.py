@@ -6,5 +6,5 @@ DATA_PATH = BASE_DIR / "data" / "ml-latest-small"
 
 def load_data():
     ratings = pd.read_csv(DATA_PATH / "ratings.csv")
-    movies = pd.read_csv(DATA_PATH / "movies.csv")
+    movies = pd.read_csv("data/ml-latest-small/movies_with_runtime.csv")
     return ratings, movies

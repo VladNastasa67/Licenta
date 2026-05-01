@@ -49,6 +49,7 @@ class ChatMovie(BaseModel):
     title: str
     genres: str
     mean_rating: float | None = None
+    runtime: int | None = None
 
 
 class ChatRequest(BaseModel):
@@ -59,6 +60,18 @@ class ChatRequest(BaseModel):
 # -------------------------
 # UTILS
 # -------------------------
+
+def clean_runtime(value):
+    if value is None:
+        return None
+
+    try:
+        if str(value).lower() == "nan":
+            return None
+
+        return int(value)
+    except Exception:
+        return None
 
 def extract_year(title):
     match = re.search(r"\((\d{4})\)", title)
@@ -220,7 +233,43 @@ def infer_sort_by(message):
     if "z-a" in msg or "alfabetic descrescator" in msg or "alfabetic descrescător" in msg:
         return "title_desc"
 
+    if (
+        "cele mai scurte" in msg
+        or "cel mai scurt" in msg
+        or "durata crescatoare" in msg
+        or "durată crescătoare" in msg
+        or "durata mica" in msg
+        or "durată mică" in msg
+        or "filme scurte" in msg
+    ):
+        return "runtime_asc"
+
+    if (
+        "cele mai lungi" in msg
+        or "cel mai lung" in msg
+        or "durata descrescatoare" in msg
+        or "durată descrescătoare" in msg
+        or "durata mare" in msg
+        or "durată mare" in msg
+        or "filme lungi" in msg
+    ):
+        return "runtime_desc"
+
     return "popularity"
+
+def movie_records(df):
+    records = []
+
+    for _, row in df.iterrows():
+        records.append({
+            "movieId": int(row["movieId"]),
+            "title": row["title"],
+            "genres": row["genres"],
+            "mean_rating": None if "mean_rating" not in row or str(row["mean_rating"]).lower() == "nan" else float(row["mean_rating"]),
+            "runtime": clean_runtime(row["runtime"]) if "runtime" in row else None
+        })
+
+    return records
 
 
 def filter_by_genres(df, genres):
@@ -259,6 +308,24 @@ def filter_by_year(df, year_start=None, year_end=None):
 
     return filtered
 
+def filter_by_runtime(df, runtime_min=None, runtime_max=None):
+    filtered = df.copy()
+
+    if "runtime" not in filtered.columns:
+        return filtered
+
+    filtered["runtime"] = filtered["runtime"].apply(clean_runtime)
+
+    if runtime_min is not None:
+        filtered = filtered[filtered["runtime"].notna()]
+        filtered = filtered[filtered["runtime"] >= int(runtime_min)]
+
+    if runtime_max is not None:
+        filtered = filtered[filtered["runtime"].notna()]
+        filtered = filtered[filtered["runtime"] <= int(runtime_max)]
+
+    return filtered
+
 
 def apply_sorting(df, sort_by="popularity"):
     if sort_by == "year_desc":
@@ -285,6 +352,20 @@ def apply_sorting(df, sort_by="popularity"):
             ascending=[True, False]
         )
 
+    if sort_by == "runtime_asc":
+        return df.sort_values(
+            ["runtime", "mean_rating"],
+            ascending=[True, False],
+            na_position="last"
+        )
+
+    if sort_by == "runtime_desc":
+        return df.sort_values(
+            ["runtime", "mean_rating"],
+            ascending=[False, False],
+            na_position="last"
+        )
+
     if sort_by == "title_asc":
         return df.sort_values("title", ascending=True)
 
@@ -295,7 +376,6 @@ def apply_sorting(df, sort_by="popularity"):
         return df.sort_values("rank")
 
     return df.sort_values("mean_rating", ascending=False)
-
 
 def build_movies_with_stats():
     recs = movies.copy()
@@ -310,6 +390,89 @@ def build_movies_with_stats():
 
     return recs
 
+
+def normalize_title(title):
+    title = title.lower()
+    title = re.sub(r"\(\d{4}\)", "", title)
+    title = re.sub(r"[^a-z0-9\s]", "", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title
+
+
+def find_movie_by_title(movie_title):
+    searched = normalize_title(movie_title)
+
+    all_movies = build_movies_with_stats()
+    all_movies["normalized_title"] = all_movies["title"].apply(normalize_title)
+
+    exact_match = all_movies[all_movies["normalized_title"] == searched]
+
+    if not exact_match.empty:
+        return exact_match.iloc[0]
+
+    partial_match = all_movies[
+        all_movies["normalized_title"].str.contains(searched, case=False, na=False)
+    ]
+
+    if not partial_match.empty:
+        return partial_match.iloc[0]
+
+    reverse_partial_match = all_movies[
+        all_movies["normalized_title"].apply(lambda x: x in searched)
+    ]
+
+    if not reverse_partial_match.empty:
+        return reverse_partial_match.iloc[0]
+
+    return None
+
+
+def get_genre_set(genres_str):
+    if not genres_str or genres_str == "(no genres listed)":
+        return set()
+
+    return set(genres_str.split("|"))
+
+
+def recommend_similar_movies_by_title(movie_title, k=10):
+    source_movie = find_movie_by_title(movie_title)
+
+    if source_movie is None:
+        return None, None
+
+    source_movie_id = int(source_movie["movieId"])
+    source_title = source_movie["title"]
+    source_genres = get_genre_set(source_movie["genres"])
+
+    recs = build_movies_with_stats()
+    recs = recs.dropna(subset=["mean_rating"])
+    recs["year"] = recs["title"].apply(extract_year)
+
+    recs = recs[recs["movieId"] != source_movie_id].copy()
+
+    def similarity_score(row):
+        movie_genres = get_genre_set(row["genres"])
+
+        if not source_genres or not movie_genres:
+            return 0
+
+        common_genres = source_genres.intersection(movie_genres)
+        all_genres = source_genres.union(movie_genres)
+
+        return len(common_genres) / len(all_genres)
+
+    recs["similarity_score"] = recs.apply(similarity_score, axis=1)
+
+    recs = recs[recs["similarity_score"] > 0]
+
+    recs = recs.sort_values(
+        ["similarity_score", "mean_rating", "year"],
+        ascending=[False, False, False]
+    )
+
+    selected = recs.head(k)
+
+    return source_title, selected
 
 def is_current_list_question(message):
     msg = message.lower()
@@ -529,6 +692,87 @@ def answer_from_dataset_question(message):
 
     return None
 
+def extract_similar_movie_title(message):
+    msg = message.strip()
+
+    patterns = [
+        r"mi-a placut\s+(.+?)(?:,|\.|$)",
+        r"mi a placut\s+(.+?)(?:,|\.|$)",
+        r"mi-a plăcut\s+(.+?)(?:,|\.|$)",
+        r"mi a plăcut\s+(.+?)(?:,|\.|$)",
+        r"ceva asemanator cu\s+(.+?)(?:,|\.|$)",
+        r"ceva asemănător cu\s+(.+?)(?:,|\.|$)",
+        r"filme ca\s+(.+?)(?:,|\.|$)",
+        r"filme similare cu\s+(.+?)(?:,|\.|$)",
+        r"recomanda-mi ceva ca\s+(.+?)(?:,|\.|$)",
+        r"recomandă-mi ceva ca\s+(.+?)(?:,|\.|$)",
+        r"recomanda-mi filme ca\s+(.+?)(?:,|\.|$)",
+        r"recomandă-mi filme ca\s+(.+?)(?:,|\.|$)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, msg, re.IGNORECASE)
+
+        if match:
+            title = match.group(1).strip()
+
+            title = re.sub(
+                r"\b(recomanda-mi|recomandă-mi|ceva|asemanator|asemănător|similar|similare)\b",
+                "",
+                title,
+                flags=re.IGNORECASE
+            )
+
+            title = title.strip(" .,!?:;")
+
+            if title:
+                return title
+
+    return None
+
+
+def answer_similar_movie_request(message):
+    movie_title = extract_similar_movie_title(message)
+
+    if not movie_title:
+        return None
+
+    source_title, recs = recommend_similar_movies_by_title(movie_title, k=10)
+
+    if source_title is None:
+        return {
+            "reply": f'Nu am găsit filmul "{movie_title}" în dataset.',
+            "genres": [],
+            "year_start": None,
+            "year_end": None,
+            "sort_by": "similarity",
+            "recommendations": []
+        }
+
+    return {
+        "reply": f'Ți-am găsit filme asemănătoare cu "{source_title}", pe baza genurilor comune.',
+        "genres": [],
+        "year_start": None,
+        "year_end": None,
+        "sort_by": "similarity",
+        "recommendations": movie_records(recs)
+    }
+    
+def seen_movie_records(df):
+    records = []
+
+    for _, row in df.iterrows():
+        records.append({
+            "movieId": int(row["movieId"]),
+            "title": row["title"],
+            "genres": row["genres"],
+            "runtime": clean_runtime(row["runtime"]) if "runtime" in row else None,
+            "rating": float(row["rating"]),
+            "timestamp": int(row["timestamp"])
+        })
+
+    return records
+
 
 # -------------------------
 # BASIC ENDPOINTS
@@ -575,7 +819,9 @@ def recommend_popularity(
     rating_min: float | None = None,
     rating_max: float | None = None,
     year_start: int | None = None,
-    year_end: int | None = None
+    year_end: int | None = None,
+    runtime_min: int | None = None,
+    runtime_max: int | None = None
 ):
     rec_ids = pop_model.recommend(k=500)
 
@@ -595,6 +841,7 @@ def recommend_popularity(
 
     recs = filter_by_rating(recs, rating_min, rating_max)
     recs = filter_by_year(recs, year_start, year_end)
+    recs = filter_by_runtime(recs, runtime_min, runtime_max)
 
     recs = apply_sorting(recs, sort_by)
     recs = recs.head(k)
@@ -607,9 +854,9 @@ def recommend_popularity(
         "rating_max": rating_max,
         "year_start": year_start,
         "year_end": year_end,
-        "recommendations": recs[
-            ["movieId", "title", "genres", "mean_rating"]
-        ].to_dict(orient="records")
+        "runtime_min": runtime_min,
+        "runtime_max": runtime_max,
+        "recommendations": movie_records(recs)
     }
 
 @app.get("/recommend/popularity-by-genres")
@@ -620,7 +867,9 @@ def recommend_popularity_by_genres(
     rating_min: float | None = None,
     rating_max: float | None = None,
     year_start: int | None = None,
-    year_end: int | None = None
+    year_end: int | None = None,
+    runtime_min: int | None = None,
+    runtime_max: int | None = None
 ):
     recs = build_movies_with_stats()
 
@@ -629,6 +878,7 @@ def recommend_popularity_by_genres(
 
     recs = filter_by_rating(recs, rating_min, rating_max)
     recs = filter_by_year(recs, year_start, year_end)
+    recs = filter_by_runtime(recs, runtime_min, runtime_max)
 
     recs = apply_sorting(recs, sort_by)
     recs = recs.head(k)
@@ -642,9 +892,9 @@ def recommend_popularity_by_genres(
         "rating_max": rating_max,
         "year_start": year_start,
         "year_end": year_end,
-        "recommendations": recs[
-            ["movieId", "title", "genres", "mean_rating"]
-        ].to_dict(orient="records")
+        "runtime_min": runtime_min,
+        "runtime_max": runtime_max,
+        "recommendations": movie_records(recs)
     }
 
 @app.get("/recommend/user-knn")
@@ -655,7 +905,9 @@ def recommend_user_knn(
     rating_min: float | None = None,
     rating_max: float | None = None,
     year_start: int | None = None,
-    year_end: int | None = None
+    year_end: int | None = None,
+    runtime_min: int | None = None,
+    runtime_max: int | None = None
 ):
     rec_ids = user_knn_model.recommend(userId, ratings, k=500)
 
@@ -675,6 +927,7 @@ def recommend_user_knn(
 
     recs = filter_by_rating(recs, rating_min, rating_max)
     recs = filter_by_year(recs, year_start, year_end)
+    recs = filter_by_runtime(recs, runtime_min, runtime_max)
 
     recs = apply_sorting(recs, sort_by)
     recs = recs.head(k)
@@ -688,9 +941,9 @@ def recommend_user_knn(
         "rating_max": rating_max,
         "year_start": year_start,
         "year_end": year_end,
-        "recommendations": recs[
-            ["movieId", "title", "genres", "mean_rating"]
-        ].to_dict(orient="records")
+        "runtime_min": runtime_min,
+        "runtime_max": runtime_max,
+        "recommendations": movie_records(recs)
     }
 
 @app.get("/users/{userId}/seen")
@@ -718,9 +971,7 @@ def user_seen_movies(
         "count": int(ratings[ratings["userId"] == userId].shape[0]),
         "limit": limit,
         "minRating": minRating,
-        "seen": seen[
-            ["movieId", "title", "genres", "rating", "timestamp"]
-        ].to_dict(orient="records"),
+        "seen": seen_movie_records(seen)
     }
 
 @app.get("/recommend/filter-only")
@@ -731,7 +982,9 @@ def recommend_filter_only(
     rating_min: float | None = None,
     rating_max: float | None = None,
     year_start: int | None = None,
-    year_end: int | None = None
+    year_end: int | None = None,
+    runtime_min: int | None = None,
+    runtime_max: int | None = None
 ):
     recs = build_movies_with_stats()
 
@@ -740,6 +993,7 @@ def recommend_filter_only(
     recs = filter_by_genres(recs, genres)
     recs = filter_by_rating(recs, rating_min, rating_max)
     recs = filter_by_year(recs, year_start, year_end)
+    recs = filter_by_runtime(recs, runtime_min, runtime_max)
 
     if recs.empty:
         return {
@@ -751,6 +1005,8 @@ def recommend_filter_only(
             "rating_max": rating_max,
             "year_start": year_start,
             "year_end": year_end,
+            "runtime_min": runtime_min,
+            "runtime_max": runtime_max,
             "recommendations": []
         }
 
@@ -766,9 +1022,33 @@ def recommend_filter_only(
         "rating_max": rating_max,
         "year_start": year_start,
         "year_end": year_end,
-        "recommendations": recs[
-            ["movieId", "title", "genres", "mean_rating"]
-        ].to_dict(orient="records")
+        "runtime_min": runtime_min,
+        "runtime_max": runtime_max,
+        "recommendations": movie_records(recs)
+    }
+
+@app.get("/recommend/similar-movie")
+def recommend_similar_movie(
+    movie_title: str,
+    k: int = 10
+):
+    source_title, recs = recommend_similar_movies_by_title(movie_title, k)
+
+    if source_title is None:
+        return {
+            "algorithm": "similar-movie",
+            "source_movie": movie_title,
+            "k": k,
+            "recommendations": [],
+            "message": "Filmul nu a fost găsit în dataset."
+        }
+
+    return {
+        "algorithm": "similar-movie",
+        "source_movie": source_title,
+        "k": k,
+        "message": f"Filme asemănătoare cu {source_title}",
+        "recommendations": movie_records(recs)
     }
 
 # -------------------------
@@ -804,6 +1084,11 @@ def chat_ai(req: ChatRequest):
 
     if dataset_answer is not None:
         return dataset_answer
+    
+    similar_answer = answer_similar_movie_request(req.message)
+
+    if similar_answer is not None:
+        return similar_answer
 
     # -------------------------
     # AI DOAR PENTRU INTERPRETAREA CERERII
@@ -835,6 +1120,8 @@ Reguli:
 - Dacă utilizatorul cere filme cu rating mic, sort_by = "rating_asc".
 - Dacă utilizatorul cere alfabetic A-Z, sort_by = "title_asc".
 - Dacă utilizatorul cere alfabetic Z-A, sort_by = "title_desc".
+- Dacă utilizatorul cere filme cele mai scurte sau durată crescătoare, sort_by = "runtime_asc".
+- Dacă utilizatorul cere filme cele mai lungi sau durată descrescătoare, sort_by = "runtime_desc".
 - Dacă nu cere o sortare clară, sort_by = "popularity".
 
 Genuri valide MovieLens:
@@ -901,7 +1188,5 @@ Returnează DOAR JSON în formatul:
         "year_start": year_start,
         "year_end": year_end,
         "sort_by": sort_by,
-        "recommendations": selected[
-            ["movieId", "title", "genres", "mean_rating"]
-        ].to_dict(orient="records"),
+        "recommendations": movie_records(selected)
     }

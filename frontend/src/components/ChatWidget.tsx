@@ -4,7 +4,8 @@ type MovieRec = {
   movieId: number;
   title: string;
   genres: string;
-  mean_rating?: number;
+  mean_rating?: number | null;
+  runtime?: number | null;
 };
 
 type ChatAiResponse = {
@@ -46,7 +47,6 @@ export default function ChatWidget({
     const text = input.trim();
     if (!text) return;
 
-    // adaug mesaj user
     setMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
     setLoading(true);
@@ -69,7 +69,6 @@ export default function ChatWidget({
 
       const data: ChatAiResponse = await res.json();
 
-      // adaug mesaj AI
       setMessages((prev) => [
         ...prev,
         {
@@ -78,7 +77,6 @@ export default function ChatWidget({
         },
       ]);
 
-      // update recomandări DOAR dacă există
       if (data.recommendations && data.recommendations.length > 0) {
         onRecommendations(data);
       }
@@ -114,11 +112,7 @@ export default function ChatWidget({
               </div>
             ))}
 
-            {loading && (
-              <div className="chat-message ai">
-                Caut recomandări...
-              </div>
-            )}
+            {loading && <div className="chat-message ai">Caut recomandări...</div>}
           </div>
 
           <div className="chat-input-row">

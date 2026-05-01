@@ -6,7 +6,8 @@ type MovieRec = {
   movieId: number;
   title: string;
   genres: string;
-  mean_rating?: number;
+  mean_rating?: number | null;
+  runtime?: number | null;
 };
 
 type RecoResponse = {
@@ -31,6 +32,7 @@ type SeenMovie = {
   movieId: number;
   title: string;
   genres: string;
+  runtime?: number | null;
   rating: number;
   timestamp: number;
 };
@@ -47,13 +49,32 @@ export default function App() {
   const API_BASE = "http://127.0.0.1:8000";
 
   const [k, setK] = useState("10");
-  const [sortBy, setSortBy] = useState< | "default" | "title_asc" | "title_desc" | "rating_asc" | "rating_desc" | "year_asc" | "year_desc" >("default");
+
+  const [sortBy, setSortBy] = useState<
+    | "default"
+    | "title_asc"
+    | "title_desc"
+    | "rating_asc"
+    | "rating_desc"
+    | "year_asc"
+    | "year_desc"
+    | "runtime_asc"
+    | "runtime_desc"
+  >("default");
+
   const [ratingMin, setRatingMin] = useState("");
   const [ratingMax, setRatingMax] = useState("");
   const [yearStart, setYearStart] = useState("");
   const [yearEnd, setYearEnd] = useState("");
+  const [runtimeMin, setRuntimeMin] = useState("");
+  const [runtimeMax, setRuntimeMax] = useState("");
+
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
-  const [algorithm, setAlgorithm] = useState<"popularity" | "filter-only" | "user-knn" | "genre-popularity" | "chat-ai">("popularity");
+
+  const [algorithm, setAlgorithm] = useState<
+    "popularity" | "filter-only" | "user-knn" | "genre-popularity" | "chat-ai"
+  >("popularity");
+
   const [users, setUsers] = useState<number[]>([]);
   const [userId, setUserId] = useState<number | null>(null);
 
@@ -140,14 +161,22 @@ export default function App() {
       return recs.sort((a, b) => getYear(b.title) - getYear(a.title));
     }
 
+    if (sortBy === "runtime_asc") {
+      return recs.sort((a, b) => (a.runtime ?? Infinity) - (b.runtime ?? Infinity));
+    }  
+
+    if (sortBy === "runtime_desc") {
+      return recs.sort((a, b) => (b.runtime ?? 0) - (a.runtime ?? 0));
+    }
+
     return recs;
   }
 
   async function loadRecommendations() {
-
     if (algorithm === "chat-ai") {
       return;
     }
+
     setLoading(true);
     setError(null);
 
@@ -155,8 +184,17 @@ export default function App() {
       const kValue = Number(k);
       const params = new URLSearchParams();
 
+      if (!kValue || kValue < 1) {
+        throw new Error("Top K trebuie să fie cel puțin 1");
+      }
+
       params.set("k", String(kValue));
-      params.set("sort_by", sortBy);
+
+      if (sortBy !== "default") {
+        params.set("sort_by", sortBy);
+      } else {
+        params.set("sort_by", "popularity");
+      }
 
       if (ratingMin !== "") {
         params.set("rating_min", ratingMin);
@@ -174,8 +212,12 @@ export default function App() {
         params.set("year_end", yearEnd);
       }
 
-      if (!kValue || kValue < 1) {
-        throw new Error("Top K trebuie să fie cel puțin 1");
+      if (runtimeMin !== "") {
+        params.set("runtime_min", runtimeMin);
+      }
+
+      if (runtimeMax !== "") {
+        params.set("runtime_max", runtimeMax);
       }
 
       let url = `${API_BASE}/recommend/popularity?${params.toString()}`;
@@ -205,22 +247,6 @@ export default function App() {
         });
 
         url = `${API_BASE}/recommend/filter-only?${params.toString()}`;
-      }
-
-      if (algorithm === "user-knn") {
-        if (!userId) throw new Error("Selectează un user");
-        params.set("userId", String(userId));
-        url = `${API_BASE}/recommend/user-knn?${params.toString()}`;
-      }
-
-      if (algorithm === "genre-popularity") {
-        if (selectedGenres.length === 0) throw new Error("Selectează cel puțin un gen");
-
-        selectedGenres.forEach((g) => {
-          params.append("genres", g);
-        });
-
-        url = `${API_BASE}/recommend/popularity-by-genres?${params.toString()}`;
       }
 
       const res = await fetch(url);
@@ -263,7 +289,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-  loadRecommendations();
+    loadRecommendations();
   }, [
     k,
     algorithm,
@@ -274,6 +300,8 @@ export default function App() {
     ratingMax,
     yearStart,
     yearEnd,
+    runtimeMin,
+    runtimeMax,
   ]);
 
   useEffect(() => {
@@ -295,6 +323,7 @@ export default function App() {
     if (!aiData.recommendations || aiData.recommendations.length === 0) {
       return;
     }
+
     setAlgorithm("chat-ai");
     setSelectedGenres(aiData.genres || []);
 
@@ -305,7 +334,7 @@ export default function App() {
       recommendations: aiData.recommendations,
     });
   }
-  
+
   return (
     <main className="app">
       <div className="container">
@@ -333,9 +362,17 @@ export default function App() {
         <section className="panel">
           <div className="info-line">
             Backend: <code>{API_BASE}</code> • Algoritm: <b>{algorithm}</b>
-            {algorithm === "user-knn" && userId ? <> • User: <b>{userId}</b></> : null}
+            {algorithm === "user-knn" && userId ? (
+              <>
+                {" "}
+                • User: <b>{userId}</b>
+              </>
+            ) : null}
             {algorithm === "genre-popularity" && selectedGenres.length > 0 ? (
-              <> • Genuri: <b>{selectedGenres.join(", ")}</b></>
+              <>
+                {" "}
+                • Genuri: <b>{selectedGenres.join(", ")}</b>
+              </>
             ) : null}
           </div>
 
@@ -346,7 +383,7 @@ export default function App() {
                 <option value="popularity">Popularity</option>
                 <option value="user-knn">User-KNN personalizat</option>
                 <option value="genre-popularity">Top filme după genuri</option>
-                <option value="filter-only">Filtrare simpla</option>
+                <option value="filter-only">Filtrare simplă</option>
               </select>
             </div>
 
@@ -390,6 +427,8 @@ export default function App() {
                 <option value="rating_asc">Rating crescător</option>
                 <option value="year_desc">An descrescător</option>
                 <option value="year_asc">An crescător</option>
+                <option value="runtime_asc">Durată crescătoare</option>
+                <option value="runtime_desc">Durată descrescătoare</option>
               </select>
             </div>
 
@@ -443,6 +482,28 @@ export default function App() {
               />
             </div>
 
+            <div className="field small">
+              <label>Durată minimă</label>
+              <input
+                type="number"
+                min="0"
+                value={runtimeMin}
+                onChange={(e) => setRuntimeMin(e.target.value)}
+                placeholder="ex: 80"
+              />
+            </div>
+
+            <div className="field small">
+              <label>Durată maximă</label>
+              <input
+                type="number"
+                min="0"
+                value={runtimeMax}
+                onChange={(e) => setRuntimeMax(e.target.value)}
+                placeholder="ex: 120"
+              />
+            </div>
+
             <button
               className="secondary-btn"
               type="button"
@@ -451,6 +512,8 @@ export default function App() {
                 setRatingMax("");
                 setYearStart("");
                 setYearEnd("");
+                setRuntimeMin("");
+                setRuntimeMax("");
               }}
             >
               Resetează filtre
@@ -486,7 +549,10 @@ export default function App() {
               onClick={async () => {
                 const next = !showSeen;
                 setShowSeen(next);
-                if (next && algorithm === "user-knn" && userId) await loadSeen();
+
+                if (next && algorithm === "user-knn" && userId) {
+                  await loadSeen();
+                }
               }}
               disabled={algorithm !== "user-knn"}
             >
@@ -498,7 +564,7 @@ export default function App() {
         <section className="panel" id="genres">
           <h2 className="section-title">Alege genurile preferate</h2>
           <p className="muted">
-            Funcția este activă când alegi algoritmul „Top filme după genuri”.
+            Funcția este activă când alegi algoritmul „Top filme după genuri” sau „Filtrare simplă”.
           </p>
 
           <div className="genres-grid">
@@ -540,7 +606,8 @@ export default function App() {
 
                     <div className="movie-meta">
                       ⭐ Rating mediu: {m.mean_rating ? m.mean_rating.toFixed(2) : "N/A"} • An:{" "}
-                      {getYear(m.title) || "N/A"}
+                      {getYear(m.title) || "N/A"} • Durată:{" "}
+                      {m.runtime ? `${m.runtime} min` : "N/A"}
                     </div>
 
                     <div>
@@ -603,7 +670,8 @@ export default function App() {
                         <div className="movie-title">{m.title}</div>
 
                         <div className="movie-meta">
-                          Rating dat de user: {m.rating} • An: {getYear(m.title) || "N/A"}
+                          Rating dat de user: {m.rating} • An: {getYear(m.title) || "N/A"} •
+                          Durată: {m.runtime ? `${m.runtime} min` : "N/A"}
                         </div>
 
                         <div>
@@ -622,6 +690,7 @@ export default function App() {
           </section>
         )}
       </div>
+
       <ChatWidget
         currentRecommendations={getSortedRecommendations()}
         onRecommendations={handleAiRecommendations}
