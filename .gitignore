@@ -7,3 +7,4 @@ build/
 *.pyc
 *.pyo
 *.db
+backend/app/users.json

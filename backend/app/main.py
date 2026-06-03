@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 
 from backend.app.services.data_service import load_data
 from backend.app.services.popularity import PopularityRecommender
@@ -13,6 +14,18 @@ import os
 import json
 import re
 
+from backend.app.services.user_service import (
+    create_user,
+    authenticate_user,
+    find_user_by_email,
+    get_registered_users,
+    save_user_favorite_movies
+)
+
+from backend.app.services.auth_service import (
+    create_access_token,
+    decode_access_token
+)
 
 # -------------------------
 # INIT
@@ -56,6 +69,74 @@ class ChatRequest(BaseModel):
     message: str
     current_recommendations: list[ChatMovie] = []
 
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+    
+class OnboardingRequest(BaseModel):
+    favorite_movie_ids: list[int]
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+optional_bearer = HTTPBearer(auto_error=False)
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer)
+):
+    if credentials is None:
+        return None
+
+    token = credentials.credentials
+    payload = decode_access_token(token)
+
+    if payload is None:
+        return None
+
+    email = payload.get("sub")
+
+    if email is None:
+        return None
+
+    user = find_user_by_email(email)
+
+    if user is None:
+        return None
+
+    return user
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = decode_access_token(token)
+
+    if payload is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token invalid sau expirat."
+        )
+
+    email = payload.get("sub")
+
+    if email is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token invalid."
+        )
+
+    user = find_user_by_email(email)
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Utilizatorul nu exista."
+        )
+
+    return user
 
 # -------------------------
 # UTILS
@@ -773,6 +854,145 @@ def seen_movie_records(df):
 
     return records
 
+def build_ratings_with_registered_users():
+    import pandas as pd
+
+    all_ratings = ratings.copy()
+    registered_users = get_registered_users()
+
+    extra_rows = []
+
+    for user in registered_users:
+        knn_user_id = user.get("knn_user_id")
+        favorite_movie_ids = user.get("favorite_movie_ids", [])
+
+        if not knn_user_id:
+            continue
+         
+        if len(favorite_movie_ids) != 5:
+            continue
+
+
+
+        for movie_id in favorite_movie_ids:
+            extra_rows.append({
+                "userId": int(knn_user_id),
+                "movieId": int(movie_id),
+                "rating": 5.0,
+                "timestamp": 0
+            })
+
+    if extra_rows:
+        extra_ratings = pd.DataFrame(extra_rows)
+        all_ratings = pd.concat([all_ratings, extra_ratings], ignore_index=True)
+
+    return all_ratings
+
+# -------------------------
+# AUTH ENDPOINTS
+# -------------------------
+
+@app.post("/auth/register")
+def register(request: RegisterRequest):
+    try:
+        user = create_user(
+            username=request.username,
+            email=request.email,
+            password=request.password
+        )
+
+        return {
+            "message": "Cont creat cu succes.",
+            "user": {
+                "id": user["id"],
+                "knn_user_id": user["knn_user_id"],
+                "username": user["username"],
+                "email": user["email"],
+                "onboarding_completed": user["onboarding_completed"]
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+@app.post("/auth/login")
+def login(request: LoginRequest):
+    user = authenticate_user(
+        email=request.email,
+        password=request.password
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Email sau parola gresita."
+        )
+
+    token = create_access_token(
+        data={
+            "sub": user["email"],
+            "user_id": user["id"]
+        }
+    )
+
+    onboarding_completed = user.get("onboarding_completed", False)
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "needs_onboarding": not onboarding_completed,
+        "user": {
+            "id": user["id"],
+            "knn_user_id": user.get("knn_user_id"),
+            "username": user["username"],
+            "email": user["email"],
+            "onboarding_completed": onboarding_completed
+        }
+    }
+
+@app.get("/auth/me")
+def get_me(current_user: dict = Depends(get_current_user)):
+    onboarding_completed = current_user.get("onboarding_completed", False)
+
+    return {
+        "id": current_user["id"],
+        "knn_user_id": current_user.get("knn_user_id"),
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "onboarding_completed": onboarding_completed,
+        "needs_onboarding": not onboarding_completed
+    }
+
+@app.post("/auth/onboarding")
+def complete_onboarding(
+    request: OnboardingRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        user = save_user_favorite_movies(
+            email=current_user["email"],
+            favorite_movie_ids=request.favorite_movie_ids
+        )
+
+        return {
+            "message": "Preferintele au fost salvate.",
+            "user": {
+                "id": user["id"],
+                "knn_user_id": user.get("knn_user_id"),
+                "username": user["username"],
+                "email": user["email"],
+                "onboarding_completed": user.get("onboarding_completed", False)
+            }
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
 
 # -------------------------
 # BASIC ENDPOINTS
@@ -785,12 +1005,34 @@ def health():
 
 @app.get("/users")
 def list_users(limit: int = 50):
-    user_ids = sorted(ratings["userId"].unique().tolist())
+    movielens_user_ids = sorted(ratings["userId"].unique().tolist())
+
+    users_list = [
+        {
+            "userId": int(user_id),
+            "label": f"MovieLens User {int(user_id)}",
+            "type": "movielens"
+        }
+        for user_id in movielens_user_ids[:limit]
+    ]
+
+    registered_users = get_registered_users()
+    
+    for user in registered_users:
+        favorite_movie_ids = user.get("favorite_movie_ids", [])
+
+    for user in registered_users:
+        if user.get("knn_user_id"):
+            users_list.insert(0, {
+                "userId": int(user["knn_user_id"]),
+                "label": f'{user["username"]} (cont logat)',
+                "type": "registered"
+            })
 
     return {
-        "count": len(user_ids),
+        "count": len(users_list),
         "limit": limit,
-        "users": user_ids[:limit]
+        "users": users_list
     }
 
 
@@ -808,6 +1050,29 @@ def list_genres():
     }
 
 
+
+@app.get("/auth/onboarding-movies")
+def onboarding_movies():
+    rec_ids = pop_model.recommend(k=100)
+
+    recs = movies[movies["movieId"].isin(rec_ids)].copy()
+
+    recs["rank"] = recs["movieId"].apply(
+        lambda x: rec_ids.index(x)
+    )
+
+    recs = recs.merge(
+        pop_model.ranking[["movieId", "mean_rating"]],
+        on="movieId",
+        how="left"
+    )
+
+    recs = recs.sort_values("rank")
+
+    return {
+        "count": int(recs.shape[0]),
+        "movies": movie_records(recs)
+    }
 # -------------------------
 # RECOMMENDERS
 # -------------------------
@@ -821,7 +1086,8 @@ def recommend_popularity(
     year_start: int | None = None,
     year_end: int | None = None,
     runtime_min: int | None = None,
-    runtime_max: int | None = None
+    runtime_max: int | None = None,
+    current_user: dict | None = Depends(get_optional_user)
 ):
     rec_ids = pop_model.recommend(k=500)
 
@@ -869,7 +1135,8 @@ def recommend_popularity_by_genres(
     year_start: int | None = None,
     year_end: int | None = None,
     runtime_min: int | None = None,
-    runtime_max: int | None = None
+    runtime_max: int | None = None,
+    current_user: dict | None = Depends(get_optional_user)
 ):
     recs = build_movies_with_stats()
 
@@ -907,9 +1174,18 @@ def recommend_user_knn(
     year_start: int | None = None,
     year_end: int | None = None,
     runtime_min: int | None = None,
-    runtime_max: int | None = None
+    runtime_max: int | None = None,
+    current_user: dict = Depends(get_current_user)
 ):
-    rec_ids = user_knn_model.recommend(userId, ratings, k=500)
+    ratings_with_registered_users = build_ratings_with_registered_users()
+
+    user_knn_model.fit(ratings_with_registered_users)
+
+    rec_ids = user_knn_model.recommend(
+        userId,
+        ratings_with_registered_users,
+        k=500
+    )
 
     recs = movies[movies["movieId"].isin(rec_ids)].copy()
 
@@ -950,7 +1226,8 @@ def recommend_user_knn(
 def user_seen_movies(
     userId: int,
     limit: int = 50,
-    minRating: float = 0.0
+    minRating: float = 0.0,
+    current_user: dict = Depends(get_current_user)
 ):
     ur = ratings[ratings["userId"] == userId]
 
@@ -984,7 +1261,8 @@ def recommend_filter_only(
     year_start: int | None = None,
     year_end: int | None = None,
     runtime_min: int | None = None,
-    runtime_max: int | None = None
+    runtime_max: int | None = None,
+    current_user: dict | None = Depends(get_optional_user)
 ):
     recs = build_movies_with_stats()
 
@@ -1030,7 +1308,8 @@ def recommend_filter_only(
 @app.get("/recommend/similar-movie")
 def recommend_similar_movie(
     movie_title: str,
-    k: int = 10
+    k: int = 10,
+    current_user: dict | None = Depends(get_optional_user)
 ):
     source_title, recs = recommend_similar_movies_by_title(movie_title, k)
 
@@ -1056,13 +1335,10 @@ def recommend_similar_movie(
 # -------------------------
 
 @app.post("/chat-ai")
-def chat_ai(req: ChatRequest):
+def chat_ai(req: ChatRequest,current_user: dict | None = Depends(get_optional_user)):
     final_count = 10
 
-    # -------------------------
-    # LISTA CURENTĂ DIN UI
-    # -------------------------
-
+   
     current_list = []
 
     for m in req.current_recommendations:
