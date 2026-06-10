@@ -38,7 +38,11 @@ app = FastAPI(title="Movie Recommender API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://192.168.0.184:5173"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -777,18 +781,32 @@ def extract_similar_movie_title(message):
     msg = message.strip()
 
     patterns = [
-        r"mi-a placut\s+(.+?)(?:,|\.|$)",
-        r"mi a placut\s+(.+?)(?:,|\.|$)",
-        r"mi-a plăcut\s+(.+?)(?:,|\.|$)",
-        r"mi a plăcut\s+(.+?)(?:,|\.|$)",
-        r"ceva asemanator cu\s+(.+?)(?:,|\.|$)",
-        r"ceva asemănător cu\s+(.+?)(?:,|\.|$)",
-        r"filme ca\s+(.+?)(?:,|\.|$)",
-        r"filme similare cu\s+(.+?)(?:,|\.|$)",
-        r"recomanda-mi ceva ca\s+(.+?)(?:,|\.|$)",
-        r"recomandă-mi ceva ca\s+(.+?)(?:,|\.|$)",
-        r"recomanda-mi filme ca\s+(.+?)(?:,|\.|$)",
-        r"recomandă-mi filme ca\s+(.+?)(?:,|\.|$)",
+        r"mi-a placut\s+(.+?)(?:,|\.|\?|$)",
+        r"mi a placut\s+(.+?)(?:,|\.|\?|$)",
+        r"mi-a plăcut\s+(.+?)(?:,|\.|\?|$)",
+        r"mi a plăcut\s+(.+?)(?:,|\.|\?|$)",
+
+        r"am vazut\s+(.+?)\s+si mi-a placut",
+        r"am vazut\s+(.+?)\s+si mi a placut",
+        r"am văzut\s+(.+?)\s+și mi-a plăcut",
+        r"am văzut\s+(.+?)\s+și mi a plăcut",
+
+        r"filme asemanatoare cu\s+(.+?)(?:,|\.|\?|$)",
+        r"filme asemănătoare cu\s+(.+?)(?:,|\.|\?|$)",
+        r"ceva asemanator cu\s+(.+?)(?:,|\.|\?|$)",
+        r"ceva asemănător cu\s+(.+?)(?:,|\.|\?|$)",
+        r"filme similare cu\s+(.+?)(?:,|\.|\?|$)",
+        r"filme ca\s+(.+?)(?:,|\.|\?|$)",
+
+        r"recomanda-mi ceva ca\s+(.+?)(?:,|\.|\?|$)",
+        r"recomandă-mi ceva ca\s+(.+?)(?:,|\.|\?|$)",
+        r"recomanda-mi filme ca\s+(.+?)(?:,|\.|\?|$)",
+        r"recomandă-mi filme ca\s+(.+?)(?:,|\.|\?|$)",
+
+        r"daca mi-a placut\s+(.+?)(?:,|\.|\?|$)",
+        r"daca mi a placut\s+(.+?)(?:,|\.|\?|$)",
+        r"dacă mi-a plăcut\s+(.+?)(?:,|\.|\?|$)",
+        r"dacă mi a plăcut\s+(.+?)(?:,|\.|\?|$)",
     ]
 
     for pattern in patterns:
@@ -798,13 +816,13 @@ def extract_similar_movie_title(message):
             title = match.group(1).strip()
 
             title = re.sub(
-                r"\b(recomanda-mi|recomandă-mi|ceva|asemanator|asemănător|similar|similare)\b",
+                r"\b(recomanda-mi|recomandă-mi|recomanda|recomandă|ceva|filme|film|similar|similare|asemanator|asemănător|cu|ca)\b",
                 "",
                 title,
                 flags=re.IGNORECASE
             )
 
-            title = title.strip(" .,!?:;")
+            title = title.strip(" .,!?:;\"'")
 
             if title:
                 return title
@@ -822,7 +840,7 @@ def answer_similar_movie_request(message):
 
     if source_title is None:
         return {
-            "reply": f'Nu am găsit filmul "{movie_title}" în dataset.',
+            "reply": f'Nu am gasit filmul "{movie_title}" in dataset. Incearca sa scrii titlul mai exact, de exemplu "Toy Story", "Matrix" sau "Forrest Gump".',
             "genres": [],
             "year_start": None,
             "year_end": None,
@@ -831,7 +849,7 @@ def answer_similar_movie_request(message):
         }
 
     return {
-        "reply": f'Ți-am găsit filme asemănătoare cu "{source_title}", pe baza genurilor comune.',
+        "reply": f'Ti-am gasit filme asemanatoare cu "{source_title}", pe baza genurilor comune, a ratingului mediu si a anului de aparitie.',
         "genres": [],
         "year_start": None,
         "year_end": None,

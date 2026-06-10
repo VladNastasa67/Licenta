@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import "./AuthPage.css";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "http://192.168.0.184:8000";
 
 type OnboardingMovie = {
   movieId: number;
