@@ -30,7 +30,7 @@ export default function ChatWidget({
   currentRecommendations,
   onRecommendations,
 }: Props) {
-  const API_BASE = "http://192.168.0.184:8000";
+  const API_BASE = "https://licenta-backend-n7r9.onrender.com";
 
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
